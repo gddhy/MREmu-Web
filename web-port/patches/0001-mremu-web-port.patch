@@ -1,0 +1,216 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 4797ca0..b3e8fc3 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -28,47 +28,73 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+   set(CMAKE_BUILD_TYPE Release CACHE STRING "Choose the type of build." FORCE)
+ endif()
+ 
++# ------------------------------------------------------------------ #
++# Web (Emscripten) 构建配置 —— MREMU_WEB_PATCH
++# ------------------------------------------------------------------ #
+ if(EMSCRIPTEN)
+     add_compile_options(-pthread)
+-    
++
++    # 两个关键取舍：
++    #  1) 不能开 ALLOW_MEMORY_GROWTH。多线程下 wasm 内存增长会 detach SAB，
++    #     而且 Unicorn 的 uc_mem_map_ptr 绑定的宿主指针必须整块稳定。
++    #  2) SFML(2.6.x-EMCC) 的主循环靠 emscripten_sleep 让出，需要 ASYNCIFY。
+     add_link_options(
+         "-pthread"
+-        "-sPTHREAD_POOL_SIZE=4"
+-        #"-sPROXY_TO_PTHREAD=1"
+-        "-sINITIAL_MEMORY=67108864"
+-        "-sALLOW_MEMORY_GROWTH=1"
++        "-sPTHREAD_POOL_SIZE=8"
++        "-sDEFAULT_PTHREAD_STACK_SIZE=2mb"
++        "-sSTACK_SIZE=5mb"
++        "-sINITIAL_MEMORY=268435456"
++        "-sMAXIMUM_MEMORY=536870912"
+         "-sUSE_OGG=1"
+         "-sUSE_VORBIS=1"
+         "-sEMULATE_FUNCTION_POINTER_CASTS=1"
+         "-sSUPPORT_LONGJMP=emscripten"
+-        "-sSTACK_SIZE=4mb"
+-        "-sASYNCIFY=1"
++        "-sASYNCIFY"
++        "-sASYNCIFY_STACK_SIZE=524288"
+         "-sFULL_ES2=1"
+         "-sMIN_WEBGL_VERSION=1"
+         "-sMAX_WEBGL_VERSION=1"
+         "-sGL_EXPLICIT_UNIFORM_LOCATION=1"
+         "-sGL_EXPLICIT_UNIFORM_BINDING=1"
+         "-sFORCE_FILESYSTEM=1"
+-        "--preload-file" "${PROJECT_SOURCE_DIR}/bin/Release/fs@/fs"
++        "-sALLOW_TABLE_GROWTH=1"
+         "-sWASM=1"
++        # 不设 -sEXPORT_NAME：生成代码会去找"同名全局变量"当 Module 配置，
++        # 我们的 shell 用的是经典 Module 对象
++        "-sEXPORTED_FUNCTIONS=['_main','_mremu_ready','_mremu_push_vxp']"
++        "-sEXPORTED_RUNTIME_METHODS=['FS','IDBFS','ccall','cwrap','UTF8ToString','stringToUTF8']"
++        # 注：Emscripten 6 已移除 FS.filesystems，IDBFS 要从 Module.IDBFS 取
++        "-lidbfs.js"        # /mre 挂到 IndexedDB，存档/刷新不丢
++        "-sMINIFY_HTML=0"   # Release 默认会调 html-minifier-terser（emsdk 没装 node_modules）
+     )
+-    
++
++    # 脱敏：assert/__FILE__ 会把本机绝对路径（含系统账号名）编进 wasm，
++    # 线上部署时等于把本地目录结构公开出去。用 -ffile-prefix-map 抹掉前缀。
++    # 可用 -DMREMU_FILE_PREFIX_MAP=<目录> 指定要抹掉的根（build_web.sh 会传工作区根）
++    if(DEFINED MREMU_FILE_PREFIX_MAP)
++        add_compile_options("-ffile-prefix-map=${MREMU_FILE_PREFIX_MAP}=.")
++    else()
++        add_compile_options("-ffile-prefix-map=${PROJECT_SOURCE_DIR}=.")
++    endif()
++
++    # SFML 2.6 的 sf::String 用 std::basic_string<Uint32>，libc++ 没有对应 char_traits
++    if(EXISTS "${PROJECT_SOURCE_DIR}/web/char_traits_shim.h")
++        add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:-include${PROJECT_SOURCE_DIR}/web/char_traits_shim.h>")
++    endif()
++
++    # 自定义 shell：canvas + 拖拽装 VXP + 日志面板
++    if(EXISTS "${PROJECT_SOURCE_DIR}/web/shell.html")
++        add_link_options("--shell-file" "${PROJECT_SOURCE_DIR}/web/shell.html")
++    elseif(EXISTS "${PROJECT_SOURCE_DIR}/web/mremu_shell.html")
++        add_link_options("--shell-file" "${PROJECT_SOURCE_DIR}/web/mremu_shell.html")
++    endif()
++
+     if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+-        add_compile_options(-g3) 
+-        add_link_options(
+-            "-g3"
+-            "-sASSERTIONS=2"
+-            "-sALLOW_TABLE_GROWTH=1" 
+-            "-sEXPORT_ALL=1"
+-        )
+-    elseif(CMAKE_BUILD_TYPE STREQUAL "Release")
+-        add_compile_options(-O3 -flto)
+-        add_link_options(
+-            "-O3"
+-            "-flto"
+-            "-sASSERTIONS=0"
+-            "-sASYNCIFY_IGNORE_INDIRECT=1"
+-        )
++        add_compile_options(-g3)
++        add_link_options("-g3" "-sASSERTIONS=2")
++    else()
++        add_compile_options(-O3)
++        add_link_options("-O3" "-sASSERTIONS=0")
+     endif()
+ endif()
+ 
+diff --git a/MREmu/App.cpp b/MREmu/App.cpp
+index 8118166..96c2867 100644
+--- a/MREmu/App.cpp
++++ b/MREmu/App.cpp
+@@ -8,6 +8,8 @@
+ #include <vmsys.h>
+ #ifdef WIN32
+ #include <io.h>
++#else
++#include <unistd.h>   // lseek/read/close
+ #endif 
+ 
+ bool App::load(std::ifstream &in) {
+diff --git a/MREmu/CMakeLists.txt b/MREmu/CMakeLists.txt
+index 9dc5abd..9596363 100644
+--- a/MREmu/CMakeLists.txt
++++ b/MREmu/CMakeLists.txt
+@@ -22,6 +22,7 @@ set(SOURCES
+ 						"mutex_wrapper.h" "Queue.h" "History.h"
+ 						"jni/Vibration.cpp" "jni/Vibration.h"
+ 						"jni/ScreenCorner.cpp" "jni/ScreenCorner.h"
++						"WebBridge.cpp"		# MREMU_WEB_PATCH
+ )
+ 
+ if (ANDROID)
+@@ -30,6 +31,11 @@ else()
+ 	add_executable(MREmu ${SOURCES})
+ endif()
+ 
++if(EMSCRIPTEN)
++	# emcc 只有在输出名是 .html 时才会套用 --shell-file
++	set_target_properties(MREmu PROPERTIES SUFFIX ".html")
++endif()
++
+ if (CMAKE_VERSION VERSION_GREATER 3.12)
+   set_property(TARGET MREmu PROPERTY CXX_STANDARD 20)
+ endif()
+diff --git a/MREmu/MREmu.cpp b/MREmu/MREmu.cpp
+index 9d41aca..f3369e2 100644
+--- a/MREmu/MREmu.cpp
++++ b/MREmu/MREmu.cpp
+@@ -70,7 +70,11 @@ int main(int argc, char** argv) {
+ 	if (app_path.size())
+ 		spdlog::info("Vxp path from args: {} {}", app_path, path_is_local ? "(local path)" : "");
+ 
++	#ifndef __EMSCRIPTEN__ // MREMU_WEB_PATCH
+ 	fs::current_path(fs::path(argv[0]).parent_path());
++#else
++	// wasm 没有真实可执行文件路径，cwd 已经是 MEMFS 的 "/"
++#endif
+ #else
+     auto android_logger = spdlog::android_logger_mt("android_logger", "MREmu");
+ 
+diff --git a/MREmu/MREngine/Audio.cpp b/MREmu/MREngine/Audio.cpp
+index 20a2a55..04505ee 100644
+--- a/MREmu/MREngine/Audio.cpp
++++ b/MREmu/MREngine/Audio.cpp
+@@ -6,6 +6,7 @@
+ #include <SFML/Audio.hpp>
+ #include <vmmm.h>
+ #include <vm4res.h>
++#include <vmmissing.h>   // vm_get_volume 的 extern "C" 声明（SDK 3.0.00.03 没有）
+ 
+ Midi::Midi(const char* file) {
+ 	std::lock_guard lock(access_mutex);
+diff --git a/MREmu/Memory.cpp b/MREmu/Memory.cpp
+index 74fa032..b5524a0 100644
+--- a/MREmu/Memory.cpp
++++ b/MREmu/Memory.cpp
+@@ -65,7 +65,12 @@ namespace Memory {
+ 	{
+ 		shared_memory_size = shared_memory_size_l;
+ 
++		#ifdef __EMSCRIPTEN__ // MREMU_WEB_PATCH
++		// wasm 线性内存里 16MB 对齐只会白吃堆，4KB 页对齐就满足 uc_mem_map_ptr
++		shared_memory_prt = _aligned_malloc(shared_memory_size, 0x1000);
++#else
+ 		shared_memory_prt = _aligned_malloc(shared_memory_size, 0x1000000);
++#endif
+ 
+ 		if (shared_memory_prt == NULL)
+ 			exit(1);
+diff --git a/MREmu/Path.cpp b/MREmu/Path.cpp
+index 6d54fe6..d4b7383 100644
+--- a/MREmu/Path.cpp
++++ b/MREmu/Path.cpp
+@@ -10,8 +10,12 @@ namespace Path {
+ #ifdef ANDROID
+ 	//const fs::path base_path = "/sdcard/Android/data/com.ximikboda.mremu/files/";
+ 	const fs::path base_path = "/sdcard/MREmu/";
++#else
++#ifdef __EMSCRIPTEN__ // MREMU_WEB_PATCH
++	const fs::path base_path = "/mre";   // IDBFS 挂载点，刷新不丢档
+ #else
+ 	const fs::path base_path = "./";
++#endif
+ #endif
+ 
+ 	void init()
+diff --git a/deps/mresdk/vmmissing.h b/deps/mresdk/vmmissing.h
+index 2ddbf34..070df28 100644
+--- a/deps/mresdk/vmmissing.h
++++ b/deps/mresdk/vmmissing.h
+@@ -15,6 +15,9 @@ VMINT vm_get_res_header();
+ // CharSet
+ VMWSTR vm_ucs2_string(VMSTR s);
+ 
++// Audio —— MRE SDK 3.0.00.03 里只有 vm_set_volume，没有 getter
++VMINT vm_get_volume(void);
++
+ #ifdef __cplusplus
+ }
+ #endif
+\ No newline at end of file

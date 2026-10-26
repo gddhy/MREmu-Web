@@ -1,0 +1,55 @@
+{
+  "name": "MREmu - MRE (VXP) 模拟器",
+  "short_name": "MREmu",
+  "description": "在浏览器里运行 MediaTek MRE (VXP) 应用的模拟器",
+  "id": "./",
+  "start_url": "./index.html?source=pwa",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#101014",
+  "theme_color": "#101014",
+  "lang": "zh-CN",
+  "dir": "ltr",
+  "categories": ["games", "utilities", "entertainment"],
+  "icons": [
+    {
+      "src": "ic_calculator-one.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "file_handlers": [
+    {
+      "action": "./index.html",
+      "name": "MRE 应用文件 (VXP)",
+      "accept": {
+        "application/octet-stream": [".vxp"]
+      },
+      "icons": [
+        {
+          "src": "ic_calculator-one.svg",
+          "sizes": "any",
+          "type": "image/svg+xml"
+        }
+      ],
+      "launch_type": "single-client"
+    }
+  ],
+  "launch_handler": {
+    "client_mode": "navigate-new"
+  }
+}

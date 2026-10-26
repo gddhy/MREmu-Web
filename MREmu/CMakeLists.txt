@@ -1,0 +1,83 @@
+﻿set(CMAKE_FOLDER "MREmu")
+
+set(SOURCES 
+						"MREmu.cpp" "MREmu.h" 
+						"Android.cpp" "Android.h" 
+						"Memory.cpp" "Memory.h" 
+						"Cpu.cpp" "Cpu.h" 
+						"GDB.cpp" "GDB.h" 
+						"Bridge.cpp" "Bridge.h" 
+						"App.cpp" "App.h" 
+						"ArmApp.cpp" "ArmApp.h" 
+						"DLLApp.cpp" "DLLApp.h" 
+						"NativeApp.cpp" "NativeApp.h"
+						"Disassembler.cpp" "Disassembler.h"
+						"ARModule.cpp" "ARModule.h"
+						"AppManager.cpp" "AppManager.h" "AppManagerEvents.h"
+						"AppContext.cpp" "AppContext.h"
+						"Network.cpp" "Network.h"
+						"Graphic.cpp" "Graphic.h"
+						"Log.cpp" "Log.h" 
+						"Path.cpp" "Path.h" 
+						"mutex_wrapper.h" "Queue.h" "History.h"
+						"jni/Vibration.cpp" "jni/Vibration.h"
+						"jni/ScreenCorner.cpp" "jni/ScreenCorner.h"
+						"WebBridge.cpp"		# MREMU_WEB_PATCH
+)
+
+if (ANDROID)
+	add_library(MREmu SHARED ${SOURCES})
+else()
+	add_executable(MREmu ${SOURCES})
+endif()
+
+if(EMSCRIPTEN)
+	# emcc 只有在输出名是 .html 时才会套用 --shell-file
+	set_target_properties(MREmu PROPERTIES SUFFIX ".html")
+endif()
+
+if (CMAKE_VERSION VERSION_GREATER 3.12)
+  set_property(TARGET MREmu PROPERTY CXX_STANDARD 20)
+endif()
+
+target_link_libraries(MREmu sfml-graphics)
+target_link_libraries(MREmu sfml-audio)
+target_link_libraries(MREmu unicorn)
+target_link_libraries(MREmu ADLMIDI_static)
+target_link_libraries(MREmu libiconv)
+target_link_libraries(MREmu spdlog)
+target_link_libraries(MREmu asio::asio)
+target_link_libraries(MREmu miniz)
+
+target_link_libraries(MREmu MREngine)
+target_link_libraries(MREmu NativeApps)
+target_link_libraries(MREmu Device)
+
+if(BUILTIN_GDB)
+    target_link_libraries(MREmu sfml-network)
+    target_compile_definitions(MREmu PRIVATE BUILTIN_GDB)
+endif()
+
+if(DEBUG_WINDOW)
+    target_link_libraries(MREmu imgui)
+    target_compile_definitions(MREmu PRIVATE DEBUG_WINDOW)
+endif()
+
+if(CAPSTONE)
+    target_link_libraries(MREmu capstone)
+    target_compile_definitions(MREmu PRIVATE CAPSTONE)
+endif()
+
+if (ANDROID)
+	target_link_libraries(MREmu Android -Wl,--whole-archive sfml-main -Wl,--no-whole-archive)
+
+	add_library(AL SHARED IMPORTED) 
+	set_target_properties(AL PROPERTIES IMPORTED_LOCATION "${PROJECT_SOURCE_DIR}/deps/SFML/extlibs/libs-android/${CMAKE_ANDROID_ARCH_ABI}/libopenal.so")
+	target_link_libraries(MREmu AL)
+endif()
+
+add_subdirectory (MREngine)
+add_subdirectory (NativeApps)
+add_subdirectory (Device)
+
+unset(CMAKE_FOLDER)

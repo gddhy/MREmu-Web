@@ -1,0 +1,204 @@
+package com.ximikboda.mremu
+
+import android.Manifest
+import android.app.NativeActivity
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
+import android.os.Bundle
+import android.os.Environment
+import android.provider.Settings
+import android.util.Log
+import android.content.Context
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
+import android.view.View
+import android.view.WindowInsets
+import android.view.WindowInsetsController
+import android.view.RoundedCorner
+import java.io.File
+import java.io.FileOutputStream
+
+class MainActivity : NativeActivity() {
+    companion object {
+        private const val STORAGE_PERMISSION_CODE = 100
+        private const val MANAGE_STORAGE_REQUEST_CODE = 101
+
+        init {
+            System.loadLibrary("MREmu")
+        }
+    }
+
+    private external fun notifyPermissionState(granted: Boolean)
+    private external fun nativeLoadVxpFile(fd: Int, path: String)
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        checkAndRequestStoragePermission()
+
+        hideSystemUI()
+
+        handleIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        handleIntent(intent)
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) {
+            hideSystemUI()
+        }
+    }
+
+    private fun checkAndRequestStoragePermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            if (!Environment.isExternalStorageManager()) {
+                Log.d("MREmu", "Requesting all files access (Android 11+)")
+                try {
+                    val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
+                    intent.addCategory("android.intent.category.DEFAULT")
+                    intent.data = Uri.parse(String.format("package:%s", packageName))
+                    startActivityForResult(intent, MANAGE_STORAGE_REQUEST_CODE)
+                } catch (e: Exception) {
+                    val intent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+                    startActivityForResult(intent, MANAGE_STORAGE_REQUEST_CODE)
+                }
+            } else {
+                Log.d("MREmu", "All files access already granted")
+                notifyPermissionState(true)
+            }
+        } else {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                if (checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+                    requestPermissions(arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE, Manifest.permission.READ_EXTERNAL_STORAGE), STORAGE_PERMISSION_CODE)
+                } else {
+                    notifyPermissionState(true)
+                }
+            } else {
+                notifyPermissionState(true)
+            }
+        }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == MANAGE_STORAGE_REQUEST_CODE) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                if (Environment.isExternalStorageManager()) {
+                    Log.d("MREmu", "User granted MANAGE_EXTERNAL_STORAGE")
+                    notifyPermissionState(true)
+                } else {
+                    Log.e("MREmu", "User denied MANAGE_EXTERNAL_STORAGE")
+                    notifyPermissionState(false)
+                }
+            }
+        }
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == STORAGE_PERMISSION_CODE) {
+            if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                Log.d("MREmu", "User granted WRITE_EXTERNAL_STORAGE")
+                notifyPermissionState(true)
+            } else {
+                Log.e("MREmu", "User denied WRITE_EXTERNAL_STORAGE")
+                notifyPermissionState(false)
+            }
+        }
+    }
+
+    private fun hideSystemUI() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.setDecorFitsSystemWindows(false)
+            window.insetsController?.let { controller ->
+                controller.hide(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
+                controller.systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            }
+        } else {
+            @Suppress("DEPRECATION")
+            window.decorView.systemUiVisibility = (
+                    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                            or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                            or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                            or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                            or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                            or View.SYSTEM_UI_FLAG_FULLSCREEN
+                    )
+        }
+    }
+
+    private fun handleIntent(intent: Intent?) {
+        if (intent?.action == Intent.ACTION_VIEW) {
+            val uri = intent.data
+            if (uri != null) {
+                Thread {
+                    try {
+                        val pfd = contentResolver.openFileDescriptor(uri, "r")
+                        if (pfd != null) {
+                            val fd = pfd.detachFd()
+                            val pathString = uri.toString()
+
+                            Log.d("MREmu", "Opened FD: $fd for URI: $pathString")
+
+                            runOnUiThread {
+                                nativeLoadVxpFile(fd, pathString)
+                            }
+                        } else {
+                            Log.e("MREmu", "Cannot open FileDescriptor for $uri")
+                        }
+                    } catch (e: Exception) {
+                        Log.e("MREmu", "Error opening file descriptor", e)
+                    }
+                }.start()
+            }
+        }
+    }
+
+    fun triggerVibration(durationMs: Long) {
+        val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val vibratorManager = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
+            vibratorManager.defaultVibrator
+        } else {
+            @Suppress("DEPRECATION")
+            getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            vibrator.vibrate(VibrationEffect.createOneShot(durationMs, VibrationEffect.DEFAULT_AMPLITUDE))
+        } else {
+            @Suppress("DEPRECATION")
+            vibrator.vibrate(durationMs)
+        }
+    }
+
+    fun hasVibrator(): Boolean {
+        val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val vibratorManager = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
+            vibratorManager.defaultVibrator
+        } else {
+            @Suppress("DEPRECATION")
+            getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+        }
+
+        return vibrator.hasVibrator()
+    }
+
+    fun getScreenCornerRadius(): Int {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val insets = window.decorView.rootWindowInsets
+
+            if (insets != null) {
+                val corner = insets.getRoundedCorner(RoundedCorner.POSITION_TOP_LEFT)
+                return corner?.radius ?: 0
+            }
+        }
+        return 0
+    }
+}

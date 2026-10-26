@@ -1,0 +1,745 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no,viewport-fit=cover">
+<title>MREmu Web — MediaTek MRE (VXP) 模拟器</title>
+<meta name="theme-color" content="#101014">
+<link rel="icon" href="ic_calculator-one.svg" type="image/svg+xml">
+<link rel="manifest" href="manifest.json">
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%; background: #101014; color: #e8e8ef;
+    font: 13px/1.5 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    overflow: hidden; -webkit-tap-highlight-color: transparent;
+  }
+  body { display: flex; flex-direction: column; }
+
+  /* 工具栏/状态栏不再悬浮，改为固定占位的上下条，画布区域独占中间，
+     这样无论窗口多小都不会盖住 240x320 的屏幕内容 */
+  .bar {
+    flex: none; display: flex; gap: 8px; align-items: center; justify-content: center;
+    padding: 8px 12px; width: 100%;
+    background: rgba(22,22,28,.92); backdrop-filter: blur(10px);
+    border: 0 solid rgba(255,255,255,.12);
+    font-size: 12px; user-select: none; z-index: 10;
+  }
+  #topbar { border-bottom-width: 1px; flex-wrap: wrap; }
+  #bottombar { border-top-width: 1px; justify-content: center; }
+
+  #stage {
+    flex: 1 1 auto; min-height: 0; min-width: 0;
+    display: grid; place-items: center; padding: 8px;
+    background: #0b0b0f;
+  }
+  /* SFML 的 emscripten 移植版按这个 id 找 canvas */
+  #canvas {
+    display: block; background: #000; touch-action: none;
+    max-width: 100%; max-height: 100%; outline: none;
+    border-radius: 4px;
+    image-rendering: pixelated;
+  }
+
+  button, label.btn {
+    appearance: none; border: 0; cursor: pointer;
+    background: #2c2c38; color: #e8e8ef; padding: 7px 12px;
+    border-radius: 999px; font-size: 12px; font-family: inherit;
+  }
+  button:hover, label.btn:hover { background: #3a3a4a; }
+  button:disabled { opacity: .45; cursor: default; }
+  button.primary { background: #4a6cf7; color: #fff; }
+  button.primary:hover { background: #5b7bff; }
+  .sep { width: 1px; height: 18px; background: rgba(255,255,255,.15); }
+  .dim { color: #8b8b9c; }
+
+  /* ---- 自绘"已导入文件"下拉面板（不用 <select>，各端渲染一致） ---- */
+  #lib-wrap { position: relative; }
+  #lib-menu {
+    position: absolute; top: calc(100% + 8px); left: 50%; transform: translateX(-50%);
+    min-width: 300px; max-width: min(86vw, 460px); max-height: 55vh; overflow: auto;
+    background: #1c1c24; border: 1px solid rgba(255,255,255,.14); border-radius: 12px;
+    padding: 6px; box-shadow: 0 10px 34px rgba(0,0,0,.55);
+  }
+  .lib-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 12px; border-radius: 8px; cursor: pointer;
+  }
+  .lib-row:hover { background: #2c2c38; }
+  .lib-row.on { background: #23233a; }
+  .lib-row .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+  .lib-row .sz { color: #8b8b9c; font-size: 11px; flex: none; }
+  .lib-row .del {
+    flex: none; appearance: none; border: 0; background: transparent; color: #ff8a8a;
+    cursor: pointer; font-size: 13px; line-height: 1; padding: 3px 7px; border-radius: 6px; font-family: inherit;
+  }
+  .lib-row .del:hover { background: #3a2a2e; }
+
+  /* ---- 自绘确认弹窗（不用 window.confirm） ---- */
+  .modal {
+    position: fixed; inset: 0; z-index: 60; display: grid; place-items: center;
+    background: rgba(5,5,8,.62); backdrop-filter: blur(2px);
+  }
+  .mcard {
+    width: min(88vw, 380px); background: #1c1c24;
+    border: 1px solid rgba(255,255,255,.14); border-radius: 14px;
+    padding: 18px; box-shadow: 0 18px 60px rgba(0,0,0,.6);
+  }
+  .mmsg { font-size: 13px; line-height: 1.6; white-space: pre-line; color: #e8e8ef; margin-bottom: 16px; }
+  .mrow { display: flex; gap: 10px; justify-content: flex-end; }
+
+  .hideable { display: none !important; }
+
+  #drop {
+    position: fixed; inset: 0; display: none; place-items: center;
+    background: rgba(74,108,247,.18); border: 2px dashed #4a6cf7;
+    font-size: 16px; z-index: 20;
+  }
+  #drop.on { display: grid; }
+
+  #splash {
+    position: fixed; inset: 0; z-index: 50; display: grid; place-items: center;
+    background: radial-gradient(circle at 50% 40%, #1b1b24, #0b0b0f 70%);
+    transition: opacity .35s ease;
+  }
+  #splash.hide { opacity: 0; pointer-events: none; }
+  .card { text-align: center; max-width: 420px; padding: 0 24px; }
+  .card h1 { font-size: 20px; margin: 0 0 6px; font-weight: 600; letter-spacing: .3px; }
+  .card p { color: #9a9aac; margin: 0 0 18px; font-size: 12.5px; }
+  .card p.src { margin: 14px 0 0; font-size: 11.5px; }
+  .src a { color: #8fa8ff; text-decoration: none; }
+  .src a:hover { text-decoration: underline; }
+  .spin {
+    width: 34px; height: 34px; margin: 0 auto 16px; border-radius: 50%;
+    border: 3px solid rgba(255,255,255,.14); border-top-color: #4a6cf7;
+    animation: spin .9s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  #log {
+    position: fixed; left: 12px; bottom: 52px; width: min(560px, calc(100vw - 24px));
+    max-height: 30vh; overflow: auto; padding: 8px 10px; border-radius: 10px;
+    background: rgba(10,10,14,.86); border: 1px solid rgba(255,255,255,.1);
+    font: 11px/1.45 ui-monospace, Consolas, monospace; color: #9ad0a0;
+    white-space: pre-wrap; display: none; z-index: 55;
+  }
+  #log.on { display: block; }
+  #log .err { color: #ff8a8a; }
+  @media (max-width: 560px) {
+    .bar { padding: 6px 8px; gap: 6px; }
+    .bar button, .bar label.btn { padding: 6px 9px; font-size: 11px; }
+  }
+</style>
+</head>
+<body>
+
+<div id="topbar" class="bar">
+  <label class="btn primary" for="vxpfile">选择 VXP 文件</label>
+  <input id="vxpfile" type="file" accept=".vxp,application/octet-stream" hidden>
+  <div id="lib-wrap" class="hideable">
+    <button id="lib-btn" title="之前导入过的文件（存在 IndexedDB 里，刷新不丢）">已导入 <span id="lib-count">0</span> 个 ▾</button>
+    <div id="lib-menu" class="hideable"></div>
+  </div>
+  <div class="sep"></div>
+  <button id="btn-install" class="hideable" title="安装为桌面应用（PWA）">安装</button>
+  <button id="btn-full">全屏</button>
+  <button id="btn-log">日志</button>
+</div>
+
+<div id="stage"><canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas></div>
+
+<div id="bottombar" class="bar">
+  <span id="stat" class="dim">初始化…</span>
+</div>
+
+<div id="log"></div>
+<div id="drop">松开以加载 VXP</div>
+
+<div id="splash">
+  <div class="card">
+    <div class="spin" id="spin"></div>
+    <h1>MREmu Web</h1>
+    <p id="splash-msg">正在加载 WebAssembly 运行时…</p>
+    <p class="src">项目来自 <a href="https://github.com/XimikBoda/MREmu" target="_blank" rel="noopener noreferrer">github.com/XimikBoda/MREmu</a></p>
+  </div>
+</div>
+
+<div id="modal" class="modal hideable" role="dialog" aria-modal="true">
+  <div class="mcard">
+    <div id="modal-msg" class="mmsg"></div>
+    <div class="mrow">
+      <button id="modal-cancel">取消</button>
+      <button id="modal-ok" class="primary">确定</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ------------------------------------------------------------------
+ * Module 配置：必须写在 emscripten 注入的那段脚本之前。
+ * 注意：注释里千万别写那个三花括号的脚本占位符，
+ *       emscripten 会把它替换成真实的 script 标签，从而提前闭合本块。
+ * ------------------------------------------------------------------ */
+var Module = {
+  canvas: document.getElementById('canvas'),
+  print: function (t) { Log.info(t); },
+  printErr: function (t) { Log.err(t); },
+  locateFile: function (path) {
+    // .wasm / .data 与 html 同目录
+    return path;
+  },
+  onAbort: function (what) {
+    Log.err('[abort] ' + what);
+    Splash.error('运行时崩溃：' + what + '\n（按 F12 看控制台）');
+  },
+  preRun: [function () {
+    // /mre 用来放 fs/（模拟器的盘符目录树）和 vxp。
+    // 注意：preRun 阶段 FS.filesystems 还没注册完，IDBFS 的挂载要放到
+    // onRuntimeInitialized（那时 FS.init 已跑过，而 main() 还没进）。
+    try { Module.FS.mkdir('/mre'); } catch (e) {}
+    try { Module.FS.mkdir('/mre/fs'); } catch (e) {}
+  }],
+  onRuntimeInitialized: function () {
+    // 持久化：/mre 挂到 IndexedDB，刷新页面后文件还在
+    try {
+      var fsys = Module.FS && Module.FS.filesystems;
+      var IDBFS = (fsys && fsys.IDBFS) || Module.IDBFS;
+      if (IDBFS) {
+        Module.FS.mount(IDBFS, {}, '/mre');
+        Module.FS.syncfs(true, function (e) {
+          if (e) { Log.err('[idbfs] load: ' + e); return; }
+          Log.info('[idbfs] 已恢复存档目录');
+          // 从自建文件库把 VXP 物化进 /mre/fs/e（多窗口竞态自愈）
+          Lib.restoreAll().then(function () { return Lib.refresh(); })
+            .then(function (n) {
+              if (Boot.ready && n) setStat('就绪 · ' + n + ' 个已导入，点上方按钮选择运行');
+            })
+            .catch(function (e2) { Log.err('[lib] ' + e2); });
+        });
+      } else {
+        Log.err('[idbfs] 没有 IDBFS（链接时加 -lidbfs.js），文件不会持久化');
+      }
+    } catch (e) {
+      Log.err('[idbfs] ' + e);
+    }
+    Boot.onRuntimeReady();
+  }
+};
+
+/* ------------------------------------------------------------------
+ * 静态托管兜底：没有 COOP/COEP 响应头时页面不是 crossOriginIsolated，
+ * SharedArrayBuffer 不存在，pthreads 版 wasm 会直接报错。
+ * 这里先把 wasm 实例化"挂起"（页面停留在加载画面），等下面的
+ * Service Worker 注入响应头并刷新页面后再正常启动。
+ * ------------------------------------------------------------------ */
+if (typeof window !== 'undefined' && !window.crossOriginIsolated) {
+  Module.instantiateWasm = function () { return new Promise(function () {}); };
+}
+
+/* ------------------------------------------------------------------
+ * 小工具
+ * ------------------------------------------------------------------ */
+var Log = (function () {
+  var el = document.getElementById('log');
+  var on = false;
+  function push(cls, s) {
+    var d = document.createElement('div');
+    if (cls) d.className = cls;
+    d.textContent = s;
+    el.appendChild(d);
+    el.scrollTop = el.scrollHeight;
+    while (el.childNodes.length > 400) el.removeChild(el.firstChild);
+  }
+  return {
+    info: function (s) { push('', s); },
+    err: function (s) { push('err', s); },
+    toggle: function (v) {
+      on = (v === undefined) ? !on : v;
+      el.classList.toggle('on', on);
+      return on;
+    }
+  };
+})();
+
+var Splash = {
+  el: document.getElementById('splash'),
+  msg: document.getElementById('splash-msg'),
+  spin: document.getElementById('spin'),
+  text: function (s) { this.msg.textContent = s; },
+  error: function (s) { this.spin.style.display = 'none'; this.msg.textContent = s; this.el.classList.remove('hide'); },
+  hide: function () { this.el.classList.add('hide'); }
+};
+
+function setStat(s) { document.getElementById('stat').textContent = s; }
+
+/* ------------------------------------------------------------------
+ * 自绘确认弹窗（替代 window.confirm，各端样式一致）
+ * Modal.confirm(msg, okText) -> Promise<boolean>
+ * ------------------------------------------------------------------ */
+var Modal = {
+  _resolve: null,
+  confirm: function (msg, okText) {
+    return new Promise(function (resolve) {
+      Modal._resolve = resolve;
+      document.getElementById('modal-msg').textContent = msg;
+      document.getElementById('modal-ok').textContent = okText || '确定';
+      document.getElementById('modal').classList.remove('hideable');
+    });
+  },
+  close: function (val) {
+    document.getElementById('modal').classList.add('hideable');
+    var r = Modal._resolve;
+    Modal._resolve = null;
+    if (r) r(!!val);
+  }
+};
+document.getElementById('modal-ok').addEventListener('click', function () { Modal.close(true); });
+document.getElementById('modal-cancel').addEventListener('click', function () { Modal.close(false); });
+document.getElementById('modal').addEventListener('click', function (e) {
+  if (e.target === this) Modal.close(false);   // 点遮罩 = 取消
+});
+window.addEventListener('keydown', function (e) {
+  if (e.key === 'Escape' && Modal._resolve) Modal.close(false);
+});
+
+/* ------------------------------------------------------------------
+ * 已导入文件库
+ *
+ * 存储分两层：
+ *   1) 自建 IndexedDB 库 "mremu-lib"（逐文件 put/delete）—— 唯一可信来源。
+ *      不用 IDBFS 存库的原因：IDBFS 的"本地→远程"同步会删除远程里本地没有
+ *      的条目，而 navigate-new 模式下每次双击都开新窗口，旧窗口的过期快照
+ *      一同步就会把新导入的文件"修剪"掉（表现为"只剩最近打开的一两个"，
+ *      实际是并发窗口互相覆盖）。
+ *   2) /mre/fs/e/（MEMFS+IDBFS）—— 只是模拟器运行时的文件视图：
+ *      页面启动时和启动应用前都会从自建库重新物化，天然自愈。
+ * ------------------------------------------------------------------ */
+var Lib = {
+  E_DIR: '/mre/fs/e',
+  DB_NAME: 'mremu-lib',
+  STORE: 'files',
+  current: '',            // 最近一次运行的文件名（面板里高亮显示）
+  _dbP: null,
+
+  safeName: function (raw) {
+    // 保留中文等 Unicode 字符（\w 只匹配 ASCII，会把中文名吞成下划线），
+    // 只替换文件系统非法字符和控制符
+    var n = String(raw || 'app.vxp').replace(/[\\/:*?"<>|\x00-\x1f]+/g, '_').trim();
+    if (!n || n === '_') n = 'app.vxp';
+    return n;
+  },
+
+  /* ---- 自建 IndexedDB（文件库的唯一可信来源） ---- */
+  openDB: function () {
+    if (this._dbP) return this._dbP;
+    this._dbP = new Promise(function (resolve, reject) {
+      var req = indexedDB.open(Lib.DB_NAME, 1);
+      req.onupgradeneeded = function () {
+        if (!req.result.objectStoreNames.contains(Lib.STORE))
+          req.result.createObjectStore(Lib.STORE);
+      };
+      req.onsuccess = function () { resolve(req.result); };
+      req.onerror = function () { reject(req.error); };
+    });
+    return this._dbP;
+  },
+  _tx: function (mode, fn) {
+    return this.openDB().then(function (db) {
+      return new Promise(function (resolve, reject) {
+        var tx = db.transaction(Lib.STORE, mode);
+        var req = fn(tx.objectStore(Lib.STORE));
+        tx.oncomplete = function () { resolve(req); };   // 注意：resolve 的是请求对象本身
+        tx.onerror = function () { reject(tx.error); };
+        tx.onabort = function () { reject(tx.error); };
+      });
+    });
+  },
+  idbPut: function (name, buf) {
+    return this._tx('readwrite', function (st) { return st.put(buf, name); });
+  },
+  idbDelete: function (name) {
+    return this._tx('readwrite', function (st) { return st.delete(name); });
+  },
+  idbGet: function (name) {
+    return this._tx('readonly', function (st) { return st.get(name); });
+  },
+  idbAll: function () {
+    return this._tx('readonly', function (st) {
+      return { keysReq: st.getAllKeys(), valsReq: st.getAll() };
+    }).then(function (r) {
+      var keys = r.keysReq.result, vals = r.valsReq.result, out = [];
+      for (var i = 0; i < keys.length; i++)
+        out.push({ name: keys[i], size: (vals[i] && vals[i].byteLength) || 0, data: vals[i] });
+      return out;
+    });
+  },
+
+  /* ---- 列表（以自建库为准；本模拟器只支持 .vxp） ---- */
+  list: async function () {
+    var out = [];
+    try {
+      var recs = await this.idbAll();
+      for (var i = 0; i < recs.length; i++) {
+        if (!/\.vxp$/i.test(recs[i].name)) continue;
+        out.push({ name: recs[i].name, size: recs[i].size });
+      }
+    } catch (e) {
+      // IndexedDB 不可用（极端隐私模式）：退回扫描虚拟文件系统
+      try {
+        var names = Module.FS.readdir(this.E_DIR);
+        for (var j = 0; j < names.length; j++) {
+          if (!/\.vxp$/i.test(names[j])) continue;
+          try {
+            var st = Module.FS.stat(this.E_DIR + '/' + names[j]);
+            out.push({ name: names[j], size: st.size });
+          } catch (e2) { /* 竞态 */ }
+        }
+      } catch (e3) { /* e 盘还没建 */ }
+    }
+    out.sort(function (a, b) { return a.name.localeCompare(b.name); });
+    return out;
+  },
+
+  /* 把库里的某个文件物化到 /mre/fs/e（缺失或大小不一致才重写） */
+  materialize: async function (name) {
+    var recs = await this.idbAll(), rec = null;
+    for (var i = 0; i < recs.length; i++)
+      if (recs[i].name === name) rec = recs[i];
+    if (!rec) return false;
+    try { Module.FS.mkdir(this.E_DIR); } catch (e) {}
+    var p = this.E_DIR + '/' + name, need = true;
+    try {
+      var st = Module.FS.stat(p);
+      need = !(st && st.size === rec.size);
+    } catch (e) { /* 不存在 */ }
+    if (need) Module.FS.writeFile(p, new Uint8Array(rec.data));
+    return true;
+  },
+
+  /* 页面启动时把库里所有文件物化一遍（自愈被多窗口竞态弄丢的副本） */
+  restoreAll: async function () {
+    var recs = await this.idbAll();
+    if (!recs.length) return 0;
+    try { Module.FS.mkdir(this.E_DIR); } catch (e) {}
+    var n = 0;
+    for (var i = 0; i < recs.length; i++) {
+      var p = this.E_DIR + '/' + recs[i].name, need = true;
+      try {
+        var st = Module.FS.stat(p);
+        need = !(st && st.size === recs[i].size);
+      } catch (e) { /* 不存在 */ }
+      if (need) { Module.FS.writeFile(p, new Uint8Array(recs[i].data)); n++; }
+    }
+    if (n) Log.info('[lib] 从文件库补回 ' + n + ' 个文件');
+    return n;
+  },
+
+  refresh: async function () {
+    var items = await this.list();
+    var wrap = document.getElementById('lib-wrap');
+    document.getElementById('lib-count').textContent = items.length;
+    wrap.classList.toggle('hideable', items.length === 0);
+    if (!items.length) this.toggleMenu(false);
+    this.renderMenu(items);
+    return items.length;
+  },
+  toggleMenu: async function (force) {
+    var menu = document.getElementById('lib-menu');
+    var show = (typeof force === 'boolean') ? force : menu.classList.contains('hideable');
+    if (show) await this.renderMenu();   // renderMenu 需要先异步取列表
+    menu.classList.toggle('hideable', !show);
+  },
+  renderMenu: async function (items) {
+    if (!items) items = await this.list();   // 未传列表就自己取
+    var menu = document.getElementById('lib-menu');
+    menu.innerHTML = '';
+    if (!items.length) {
+      var empty = document.createElement('div');
+      empty.className = 'lib-row';
+      var s = document.createElement('span');
+      s.className = 'nm dim';
+      s.textContent = '库为空，用上方「选择 VXP 文件」导入';
+      empty.appendChild(s);
+      menu.appendChild(empty);
+      return;
+    }
+    for (var i = 0; i < items.length; i++) {
+      (function (it) {
+        var row = document.createElement('div');
+        row.className = 'lib-row' + (it.name === Lib.current ? ' on' : '');
+
+        var nm = document.createElement('span');
+        nm.className = 'nm'; nm.textContent = it.name; nm.title = it.name;
+        var sz = document.createElement('span');
+        sz.className = 'sz'; sz.textContent = Math.max(1, Math.round(it.size / 1024)) + 'K';
+        var del = document.createElement('button');
+        del.className = 'del'; del.textContent = '✕'; del.title = '删除（含存档）';
+        del.addEventListener('click', function (e) { e.stopPropagation(); Lib.remove(it.name); });
+
+        row.appendChild(nm); row.appendChild(sz); row.appendChild(del);
+        row.addEventListener('click', function () { Lib.launch(it.name); Lib.toggleMenu(false); });
+        menu.appendChild(row);
+      })(items[i]);
+    }
+  },
+  launch: async function (name) {
+    if (!name) return;
+    this.current = name;
+    try { await this.materialize(name); }   // 启动前确保 /mre/fs/e 里有这个文件
+    catch (e) { Log.err('[lib] ' + e); }
+    launchPath(this.E_DIR + '/' + name, name);
+    this.refresh();
+  },
+  remove: async function (name) {
+    if (!name) return false;
+    var ok = await Modal.confirm('从库里删除「' + name + '」？\n该游戏的存档也会一起删除。', '删除');
+    if (!ok) return false;
+    try {
+      try { Module.FS.unlink(this.E_DIR + '/' + name); } catch (e) { /* 本地副本可能已不在 */ }
+      await this.idbDelete(name);
+      Module.FS.syncfs(false, function (e) { if (e) Log.err('[idbfs] save: ' + e); });
+      if (this.current === name) this.current = '';
+      Log.info('[lib] 已删除 ' + name);
+    } catch (e) {
+      Log.err('[lib] 删除失败: ' + e);
+    }
+    this.refresh();
+    if (!this.current) setStat(Boot.ready ? '就绪 · 请选择 VXP 文件' : '初始化…');
+    return true;
+  }
+};
+
+/* 面板开关 + 点击面板外自动收起 */
+document.getElementById('lib-btn').addEventListener('click', function (e) {
+  e.stopPropagation();
+  Lib.toggleMenu();
+});
+document.addEventListener('click', function (e) {
+  var wrap = document.getElementById('lib-wrap');
+  if (wrap && !wrap.contains(e.target)) Lib.toggleMenu(false);
+});
+
+/* ------------------------------------------------------------------
+ * 启动流程
+ * ------------------------------------------------------------------ */
+var Boot = {
+  ready: false,
+  pendingFile: null,      // PWA 文件处理（双击 vxp）在就绪前送达的文件
+  onRuntimeReady: function () {
+    Log.info('[boot] wasm 运行时就绪');
+    Splash.text('等待模拟器线程启动…');
+    this.waitEmu(0);
+  },
+  waitEmu: function (n) {
+    var self = this;
+    if (n > 200) { Splash.error('模拟器线程没有启动（mremu_ready() 始终为 0）'); return; }
+    var ok = 0;
+    try { ok = Module.ccall('mremu_ready', 'number', [], []); } catch (e) {}
+    if (ok) {
+      self.ready = true;
+      Splash.hide();
+      Log.info('[boot] 模拟器就绪');
+
+      // PWA 文件处理：双击 vxp 打开时，文件在就绪前就已送达
+      if (self.pendingFile) {
+        var f = self.pendingFile;
+        self.pendingFile = null;
+        loadVxp(f);
+      } else {
+        Lib.refresh().then(function (n) {
+          if (n) setStat('就绪 · ' + n + ' 个已导入，点上方按钮选择运行');
+          else setStat('就绪 · 请选择 VXP 文件');
+        }).catch(function () {});
+      }
+      return;
+    }
+    setTimeout(function () { self.waitEmu(n + 1); }, 50);
+  }
+};
+
+/* ------------------------------------------------------------------
+ * VXP 加载：File/Blob -> MEMFS/IDBFS -> 入队启动
+ * ------------------------------------------------------------------ */
+function launchPath(path, name) {
+  if (!Boot.ready) { Log.err('模拟器还没就绪'); return -1; }
+  try {
+    var rc = Module.ccall('mremu_push_vxp', 'number', ['string'], [path]);
+    if (rc === 0) {
+      setStat('运行中 · ' + name);
+      Log.info('[vxp] 已提交启动：' + path);
+      return 0;
+    }
+    Log.err('[vxp] 启动失败，返回 ' + rc);
+    return rc;
+  } catch (e) {
+    Log.err('[vxp] ' + e);
+    return -1;
+  }
+}
+
+function loadVxp(file) {
+  if (!file) return;
+  if (!Boot.ready) { Log.err('模拟器还没就绪'); return; }
+
+  var reader = new FileReader();
+  reader.onload = function () {
+    try {
+      var buf = reader.result;
+      var name = Lib.safeName(file.name);
+      var path = Lib.E_DIR + '/' + name;
+
+      // 1) 先入自建文件库（IndexedDB，唯一可信来源，不受多窗口 syncfs 竞态影响）
+      Lib.idbPut(name, buf)
+        .then(function () { Log.info('[lib] 已存入文件库：' + name); })
+        .catch(function (e) { Log.err('[lib] 保存失败: ' + e); });
+
+      // 2) 写进虚拟文件系统 e 盘（模拟器运行时视图）
+      try { Module.FS.mkdir(Lib.E_DIR); } catch (e) {}
+      Module.FS.writeFile(path, new Uint8Array(buf));
+      Module.FS.syncfs(false, function (e) {
+        if (e) Log.err('[idbfs] save: ' + e);
+      });
+
+      Lib.current = name;          // 面板高亮
+      Lib.refresh();
+      launchPath(path, name);
+    } catch (e) {
+      Log.err('[vxp] ' + e);
+    }
+  };
+  reader.onerror = function () { Log.err('[vxp] 读取文件失败'); };
+  reader.readAsArrayBuffer(file);
+}
+
+document.getElementById('vxpfile').addEventListener('change', function (e) {
+  if (e.target.files && e.target.files[0]) loadVxp(e.target.files[0]);
+  e.target.value = '';
+});
+
+/* 拖拽 */
+(function () {
+  var drop = document.getElementById('drop'), n = 0;
+  window.addEventListener('dragenter', function (e) { e.preventDefault(); n++; drop.classList.add('on'); });
+  window.addEventListener('dragleave', function (e) { e.preventDefault(); if (--n <= 0) drop.classList.remove('on'); });
+  window.addEventListener('dragover', function (e) { e.preventDefault(); });
+  window.addEventListener('drop', function (e) {
+    e.preventDefault(); n = 0; drop.classList.remove('on');
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) loadVxp(e.dataTransfer.files[0]);
+  });
+})();
+
+/* ------------------------------------------------------------------
+ * PWA：安装到桌面 + 系统文件处理（双击 .vxp 直接用模拟器打开）
+ * ------------------------------------------------------------------ */
+var deferredInstall = null;
+window.addEventListener('beforeinstallprompt', function (e) {
+  e.preventDefault();
+  deferredInstall = e;
+  document.getElementById('btn-install').classList.remove('hideable');
+});
+document.getElementById('btn-install').addEventListener('click', function () {
+  if (!deferredInstall) return;
+  deferredInstall.prompt();
+  deferredInstall.userChoice.then(function (r) {
+    Log.info('[pwa] 安装结果: ' + r.outcome);
+    deferredInstall = null;
+    document.getElementById('btn-install').classList.add('hideable');
+  });
+});
+window.addEventListener('appinstalled', function () {
+  document.getElementById('btn-install').classList.add('hideable');
+  Log.info('[pwa] 已安装到桌面');
+});
+
+/* 系统启动参数：安装后双击 .vxp / .mrp，Windows 会用新窗口打开本页并递文件进来 */
+if ('launchQueue' in window && 'setConsumer' in window.launchQueue) {
+  window.launchQueue.setConsumer(function (params) {
+    if (!params.files || !params.files.length) return;
+    params.files[0].getFile().then(function (file) {
+      Log.info('[pwa] 系统打开方式启动：' + file.name);
+      if (Boot.ready) loadVxp(file);
+      else Boot.pendingFile = file;      // 还没就绪就先存着，就绪后自动运行
+    }).catch(function (e) { Log.err('[pwa] ' + e); });
+  });
+}
+
+/* ------------------------------------------------------------------
+ * 工具栏
+ * ------------------------------------------------------------------ */
+document.getElementById('btn-full').addEventListener('click', function () {
+  unlockAudio();
+  var c = document.getElementById('stage');
+  if (!document.fullscreenElement) (c.requestFullscreen || c.webkitRequestFullscreen).call(c);
+  else document.exitFullscreen();
+});
+
+document.getElementById('btn-log').addEventListener('click', function () { Log.toggle(); });
+
+/* 触屏/鼠标：全部交给 SFML 的 emscripten 移植版处理（它监听 #canvas 事件）。
+   注意：MRE 的坐标系是 240x320，缩放由 Device::update_size 负责，JS 不需要换算。*/
+
+/* Web Audio 需要用户手势解锁 */
+var audioUnlocked = false;
+function unlockAudio() {
+  if (audioUnlocked) return;
+  audioUnlocked = true;
+  try {
+    if (typeof Module.webaudioContext !== 'undefined' && Module.webaudioContext) {
+      Module.webaudioContext.resume();
+    }
+  } catch (e) {}
+}
+window.addEventListener('pointerdown', unlockAudio, { once: true });
+window.addEventListener('keydown', unlockAudio, { once: true });
+
+/* ------------------------------------------------------------------
+ * COOP/COEP 兜底：静态托管改不了响应头，用 Service Worker 给同源响应
+ * 补上 COOP/COEP（ coi-serviceworker.js），注册成功后整页刷新一次。
+ * sessionStorage 防刷新循环；刷新后仍未隔离则给出明确报错。
+ * ------------------------------------------------------------------ */
+(function ensureCOI() {
+  if (typeof window === 'undefined') return;
+  if (window.crossOriginIsolated) {
+    try { sessionStorage.removeItem('mremuCoiReloaded'); } catch (e) {}
+    return;
+  }
+
+  var canSW = ('serviceWorker' in navigator) && window.isSecureContext;
+  if (!canSW) {
+    Splash.error('当前环境无法开启跨源隔离：页面没有 COOP/COEP 响应头，且不支持 Service Worker。\n' +
+                 'pthreads 版模拟器需要 SharedArrayBuffer。\n' +
+                 '解决办法：换支持自定义响应头的托管（Nginx / Netlify / Cloudflare Pages 的 _headers），' +
+                 '或本地用 python serve.py 打开。');
+    return;
+  }
+
+  var reloaded = false;
+  try { reloaded = !!sessionStorage.getItem('mremuCoiReloaded'); } catch (e) {}
+
+  if (!reloaded) {
+    Splash.text('正在通过 Service Worker 启用跨源隔离…');
+    try { sessionStorage.setItem('mremuCoiReloaded', '1'); } catch (e) {}
+    navigator.serviceWorker.register('coi-serviceworker.js')
+      .then(function () { window.location.reload(); })
+      .catch(function (e) {
+        try { sessionStorage.removeItem('mremuCoiReloaded'); } catch (e2) {}
+        Splash.error('Service Worker 注册失败：' + e + '\n' +
+                     '静态托管必须支持 HTTPS + Service Worker，否则无法开启跨源隔离。');
+      });
+    return;
+  }
+
+  // 已经刷新过一次仍未隔离：多半是 CDN/HTTP 缓存了旧响应
+  setTimeout(function () {
+    try { sessionStorage.removeItem('mremuCoiReloaded'); } catch (e) {}
+    Splash.error('跨源隔离未生效：Service Worker 已注册，但页面响应头未更新。\n' +
+                 '常见原因是 HTTP/CDN 缓存了旧页面，请强刷（Ctrl+F5）后重试；\n' +
+                 '或改用支持 COOP/COEP 的托管方式。');
+  }, 6000);
+})();
+</script>
+
+{{{ SCRIPT }}}
+</body>
+</html>

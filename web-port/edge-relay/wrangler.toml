@@ -1,0 +1,15 @@
+name = "mremu-relay"
+main = "worker.js"
+compatibility_date = "2024-11-01"
+
+[vars]
+# 允许连接的目标主机（逗号分隔；"*" = 不限制，不建议在生产用）
+# 例：ALLOW_HOSTS = "*.example.com, game.example.com, 1.2.3.4"
+ALLOW_HOSTS = "*"
+
+# 令牌用 secret 配置（shell 里执行：wrangler secret put RELAY_TOKEN），
+# 浏览器侧连接时要带上 ?token=<值>；不配置则不校验（本地测试用）
+# RELAY_TOKEN = "set-via-wrangler-secret"
+
+[observability]
+enabled = true

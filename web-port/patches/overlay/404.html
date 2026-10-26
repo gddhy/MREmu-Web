@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>页面不存在 · 正在返回 MREmu</title>
+<!-- 静态托管（GitHub Pages / EdgeOne Pages / 对象存储）访问不存在的路径时会返回本页，
+     这里立刻跳回站点根，避免用户停在空白 404。 -->
+<meta http-equiv="refresh" content="0; url=/">
+<style>
+  html, body { margin: 0; height: 100%; background: #101014; color: #e8e8ef;
+    font: 14px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    display: grid; place-items: center; text-align: center; }
+  a { color: #8fa8ff; }
+</style>
+</head>
+<body>
+  <div>
+    <p>页面不存在，正在返回首页…</p>
+    <p><a href="/">如果没有自动跳转，点这里</a></p>
+  </div>
+  <script>
+    // meta refresh 之外的兜底：保留 hash/查询，直接回到根
+    try {
+      var target = '/';
+      var q = location.search || '';
+      location.replace(target + q);
+    } catch (e) {
+      location.href = '/';
+    }
+  </script>
+</body>
+</html>
